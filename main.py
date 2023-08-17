@@ -23,7 +23,7 @@ def create_pages_for_units(word):
         print(word_response["message"])
         return None
     word_data = word_response["data"]
-    create_notion_page_for_a_word(word_data, words_database_id)
+    create_notion_page_for_a_word(words_database_id, word_data)
 
 
 if __name__ == "__main__":

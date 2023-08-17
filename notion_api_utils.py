@@ -14,7 +14,7 @@ HEADERS = {
 }
 
 
-def get_block_info(block_id, debug_mode=False):
+def get_block_info(block_id: str, debug_mode=False):
     api_url = f"https://api.notion.com/v1/blocks/{block_id}"
     response = requests.get(api_url, headers=HEADERS)
     if response.status_code != 200:
@@ -27,7 +27,7 @@ def get_block_info(block_id, debug_mode=False):
     return response.json()
 
 
-def detect_block_type(block_id):
+def detect_block_type(block_id: str):
     block_info = get_block_info(block_id)
     return block_info["type"]
 
@@ -176,62 +176,58 @@ def clean_id(id_str):
     return id_str.replace("-", "")
 
 
-def create_notion_page_for_a_word(database_id, word_data):
+def create_notion_page_for_a_word(database_id: str, word_data: dict):
+    # Extracting data from the Merriam-Webster response
+    word = word_data["meta"]["id"]
+    phonetic_spelling = word_data["hwi"]["prs"][0]["mw"] if "prs" in word_data["hwi"] else ""
+    part_of_speech = word_data["fl"]
+    definitions = word_data["shortdef"]
+    audio_link = (
+        f"https://media.merriam-webster.com/soundc11/{word[0]}/{word_data['hwi']['sound']['audio']}.wav"
+        if "sound" in word_data["hwi"]
+        else ""
+    )
+
     # Base structure for the Notion page
     url = f"https://api.notion.com/v1/pages"
     data = {
         "parent": {"database_id": database_id},
-        "properties": {"title": {"title": [{"text": {"content": word_data["word"]}}]}},
+        "properties": {"title": {"title": [{"text": {"content": word}}]}},
         "children": [
             {
                 "object": "block",
                 "type": "paragraph",
-                "paragraph": {"text": [{"text": {"content": word_data["phonetic_spelling"]}}]},
+                "paragraph": {"rich_text": [{"text": {"content": f"/{phonetic_spelling}/"}}]},
             },
             {
                 "object": "block",
                 "type": "paragraph",
-                "paragraph": {"text": [{"text": {"content": word_data["part_of_speech"]}}]},
+                "paragraph": {"rich_text": [{"text": {"content": part_of_speech}}]},
             },
         ],
     }
 
     # Add definitions as bulleted list
-    for definition in word_data["definitions"]:
+    for definition in definitions:
         data["children"].append(
             {
                 "object": "block",
                 "type": "bulleted_list_item",
-                "bulleted_list_item": {"text": [{"text": {"content": definition}}]},
+                "bulleted_list_item": {"rich_text": [{"text": {"content": definition}}]},
             }
         )
 
-    # Add example usages as quote blocks
-    for example in word_data["examples"]:
-        data["children"].append(
-            {"object": "block", "type": "quote", "quote": {"text": [{"text": {"content": example}}]}}
-        )
-
     # Add audio pronunciation as an external link (if provided)
-    if "audio_link" in word_data:
-        data["children"].append({"object": "block", "type": "embed", "embed": {"url": word_data["audio_link"]}})
+    if audio_link:
+        data["children"].append({"object": "block", "type": "embed", "embed": {"url": audio_link}})
 
     response = requests.post(url, headers=HEADERS, json=data)
+    if DEBUG:
+        with open(".test_create_page.json", "w") as f:
+            json.dump(response.json(), f, indent=4)
+    if response.status_code != 200:
+        print(f"Failed to create page in Notion. Status code: {response.status_code}")
+        print(response.json())
+        return None
+
     return response.json()
-
-
-# Test the function
-word_data = {
-    "word": "example",
-    "phonetic_spelling": "/ɪɡˈzæmpl/",
-    "part_of_speech": "noun",
-    "definitions": [
-        "A representative form or pattern.",
-        "A person or thing regarded in terms of their fitness to be imitated.",
-    ],
-    "examples": [
-        "He set an example for the rest of the group.",
-        "This painting is a fine example of the artist's early style.",
-    ],
-    "audio_link": "https://www.example.com/audio/example.mp3",  # Replace with actual audio link from MW
-}
