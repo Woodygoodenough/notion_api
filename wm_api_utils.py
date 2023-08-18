@@ -21,7 +21,7 @@ def get_word_mw_response(word):
     data = response.json() if response.status_code == 200 else None
     # DEBUG mode
     if DEBUG:
-        with open(".word_mw_response.json", "w") as f:
+        with open(f".{word}_mw_response.json", "w") as f:
             json.dump(data, f, indent=4)
 
     # Check if the request was successful and the data is a list
@@ -36,10 +36,4 @@ def get_word_mw_response(word):
             "message": f"Error, most likely word not found and list of suggestions returned: data = {data}",
         }
 
-    return {"error": False, "data": data[0]}
-
-
-if __name__ == "__main__":
-    # Test the function
-    word_to_lookup = "good"  # Replace with any word you want to look up
-    print(f"Definition of {word_to_lookup}: {get_word_mw_response(word_to_lookup)}")
+    return {"error": False, "data": data}

@@ -137,7 +137,7 @@ def unfold_block(page_id, debug_mode=False):
     fetch_notion_block_children_recursive(page_id)
 
     if debug_mode:
-        with open(".results.json", "w") as f:
+        with open(".flat_blokcs.json", "w") as f:
             json.dump(block_children, f, indent=4)
 
     return block_children
@@ -176,58 +176,85 @@ def clean_id(id_str):
     return id_str.replace("-", "")
 
 
-def create_notion_page_for_a_word(database_id: str, word_data: dict):
-    # Extracting data from the Merriam-Webster response
-    word = word_data["meta"]["id"]
-    phonetic_spelling = word_data["hwi"]["prs"][0]["mw"] if "prs" in word_data["hwi"] else ""
-    part_of_speech = word_data["fl"]
-    definitions = word_data["shortdef"]
-    audio_link = (
-        f"https://media.merriam-webster.com/soundc11/{word[0]}/{word_data['hwi']['sound']['audio']}.wav"
-        if "sound" in word_data["hwi"]
-        else ""
-    )
-
+def create_notion_page_for_a_word(database_id: str, word: str, word_data: list):
     # Base structure for the Notion page
     url = f"https://api.notion.com/v1/pages"
     data = {
         "parent": {"database_id": database_id},
-        "properties": {"title": {"title": [{"text": {"content": word}}]}},
-        "children": [
-            {
-                "object": "block",
-                "type": "paragraph",
-                "paragraph": {"rich_text": [{"text": {"content": f"/{phonetic_spelling}/"}}]},
-            },
-            {
-                "object": "block",
-                "type": "paragraph",
-                "paragraph": {"rich_text": [{"text": {"content": part_of_speech}}]},
-            },
-        ],
+        "properties": {
+            "title": {"title": [{"text": {"content": word}}]}
+        },  # Assuming all homographs have the same spelling
+        "children": [],
     }
 
-    # Add definitions as bulleted list
-    for definition in definitions:
-        data["children"].append(
-            {
-                "object": "block",
-                "type": "bulleted_list_item",
-                "bulleted_list_item": {"rich_text": [{"text": {"content": definition}}]},
-            }
+    for entry in word_data:
+        # Extracting data from the Merriam-Webster response for each homograph
+        phonetic_spelling = entry["hwi"]["prs"][0]["mw"] if "prs" in entry["hwi"] else ""
+        part_of_speech = entry["fl"]
+        definitions = entry["shortdef"]
+        # Add phonetic spelling, part of speech, and definitions for each homograph
+        data["children"].extend(
+            [
+                {
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {"rich_text": [{"text": {"content": phonetic_spelling}}]},
+                },
+                {
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {"rich_text": [{"text": {"content": part_of_speech}}]},
+                },
+            ]
         )
 
-    # Add audio pronunciation as an external link (if provided)
-    if audio_link:
-        data["children"].append({"object": "block", "type": "embed", "embed": {"url": audio_link}})
-
+        # Add definitions as bulleted list
+        for definition in definitions:
+            data["children"].append(
+                {
+                    "object": "block",
+                    "type": "bulleted_list_item",
+                    "bulleted_list_item": {"rich_text": [{"text": {"content": definition}}]},
+                }
+            )
     response = requests.post(url, headers=HEADERS, json=data)
-    if DEBUG:
-        with open(".test_create_page.json", "w") as f:
-            json.dump(response.json(), f, indent=4)
     if response.status_code != 200:
-        print(f"Failed to create page in Notion. Status code: {response.status_code}")
+        print(f"Failed to create Notion page. Status code: {response.status_code}")
         print(response.json())
         return None
+    # Debug mode
+    if DEBUG:
+        with open(f".{word}_notion_response.json", "w") as f:
+            json.dump(response.json(), f, indent=4)
+    page_id = response.json()["id"]
+    return page_id
 
+
+def add_contexts_links_to_unit_page_comments(
+    page_id: str, source_page_id: str, source_block_id: str, context_text: str = "test_context"
+):
+    url = "https://api.notion.com/v1/comments"
+    data = {
+        "parent": {"page_id": page_id},
+        "rich_text": [
+            {
+                "type": "text",
+                "text": {
+                    "content": context_text,
+                    "link": {
+                        "type": "url",
+                        "url": f"https://www.notion.so/{source_page_id}?pvs=4#{source_block_id}",
+                    },
+                },
+            }
+        ],
+    }
+    response = requests.post(url, headers=HEADERS, json=data)
+    status_code_verification(response)
     return response.json()
+
+
+def status_code_verification(response):
+    if response.status_code != 200:
+        print(f"Failed to create block in Notion. Status code: {response.status_code}")
+        print(response.json())
