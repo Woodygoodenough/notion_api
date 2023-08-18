@@ -254,7 +254,68 @@ def add_contexts_links_to_unit_page_comments(
     return response.json()
 
 
+def append_block_children(block_id: str):
+    url = f"https://api.notion.com/v1/blocks/{block_id}/children"
+    data = {
+        "children": [
+            {
+                "object": "block",
+                "type": "embed",
+                "embed": {
+                    "url": "https://media.merriam-webster.com/audio/prons/en/us/mp3/p/pajama02.mp3",
+                    "caption": [
+                        {"type": "text", "text": {"content": "Pronunciation audio."}},
+                    ],
+                },
+            }
+        ]
+    }
+    response = requests.patch(url, headers=HEADERS, json=data)
+    status_code_verification(response)
+    return response.json()
+
+
 def status_code_verification(response):
     if response.status_code != 200:
         print(f"Failed to create block in Notion. Status code: {response.status_code}")
         print(response.json())
+
+
+class NotionAPI:
+    BASE_URL = "https://api.notion.com/v1"
+    HEADERS = {
+        "Authorization": "Bearer YOUR_NOTION_SECRET_API_TOKEN",
+        "Notion-Version": "2021-05-13",  # This might need to be updated based on the API version you're using
+        "Content-Type": "application/json",
+    }
+
+    def __init__(self, api_token):
+        self.HEADERS["Authorization"] = f"Bearer {api_token}"
+
+    def get_page(self, page_id):
+        url = f"{self.BASE_URL}/pages/{page_id}"
+        response = requests.get(url, headers=self.HEADERS)
+        return response.json()
+
+    def create_page(self, database_id, properties):
+        url = f"{self.BASE_URL}/pages"
+        data = {"parent": {"database_id": database_id}, "properties": properties}
+        response = requests.post(url, headers=self.HEADERS, json=data)
+        return response.json()
+
+    def update_page(self, page_id, properties):
+        url = f"{self.BASE_URL}/pages/{page_id}"
+        data = {"properties": properties}
+        response = requests.patch(url, headers=self.HEADERS, json=data)
+        return response.json()
+
+    def get_database(self, database_id):
+        url = f"{self.BASE_URL}/databases/{database_id}"
+        response = requests.get(url, headers=self.HEADERS)
+        return response.json()
+
+    # Add more methods as needed for other endpoints
+
+
+if __name__ == "__main__":
+    append_block_children("48a683e7af77428b8586c2868e0988e4")
