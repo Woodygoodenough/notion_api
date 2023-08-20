@@ -3,8 +3,7 @@ import requests
 import json
 import collections
 from settings import DEBUG
-from typing import NewType
-from typing import Dict, List, Any
+from typing import NewType, Union, Dict, List, Any
 import inspect
 
 
@@ -51,7 +50,7 @@ class NotionAPI:
             case 200:
                 return response.json()
             case 400:
-                error_message = "Bad Request: The request was malformed."
+                error_message = "Bad Request: The request was malformed"
             case 401:
                 error_message = "Unauthorized: API token is invalid."
             case 403:
@@ -79,9 +78,11 @@ class NotionAPI:
         response = requests.get(url, headers=self.HEADERS)
         return self._handle_response(response)
 
-    def create_page(self, database_id: _NotionID, properties: Dict[str, Any]) -> _NotionObject:
+    def create_page(
+        self, database_id: _NotionID, properties: Dict[str, Any], children: List[_NotionObject]
+    ) -> _NotionObject:
         url = f"{self.BASE_URL}/pages"
-        data = {"parent": {"database_id": self._clean_id(database_id)}, "properties": properties}
+        data = {"parent": {"database_id": self._clean_id(database_id)}, "properties": properties, "children": children}
         response = requests.post(url, headers=self.HEADERS, json=data)
         return self._handle_response(response)
 
@@ -95,6 +96,13 @@ class NotionAPI:
         """units database_id  =  79abdc9bdbc14a1488ae0297bc756145"""
         url = f"{self.BASE_URL}/databases/{self._clean_id(database_id)}"
         response = requests.get(url, headers=self.HEADERS)
+
+        return self._handle_response(response)
+
+    def query_database(self, database_id: _NotionID, filter: Dict[str, Any]) -> _NotionObject:
+        url = f"{self.BASE_URL}/databases/{self._clean_id(database_id)}/query"
+        data = {"filter": filter}
+        response = requests.post(url, headers=self.HEADERS, json=data)
         return self._handle_response(response)
 
     def get_block_children(self, block_id: _NotionID) -> List[_NotionObject]:
@@ -133,28 +141,113 @@ class NotionAPI:
         """
         flat_block_children = []
         block_type = self.get_block(block_id)["type"]
-        if block_type != "child_page":
-            raise NotionAPIError("currently, method unfold_block() only accepts page_id as input.")
-        parent_page_id = block_id  # initialize parent_page_id
+        if block_type not in ("child_page", "child_database"):
+            raise NotionAPIError("currently, method unfold_block() only accepts page_id or database_id as input.")
+            print(block_type)
+        parent_page_id = block_id
 
-        def recursive_unfold_block(block_id: _NotionID):
-            nonlocal parent_page_id
-            block_type = self.get_block(block_id)["type"]
-            parent_page_id = block_id if block_type == "child_page" else parent_page_id
+        def recursive_unfold_block(block_id: _NotionID, parent_page_id: _NotionID):
             block_children = self.get_block_children(block_id)
             for block_child in block_children:
+                block_child["parent_page_id"] = parent_page_id
                 flat_block_children.append(block_child)
                 if block_child["has_children"]:
-                    recursive_unfold_block(block_child["id"])
+                    parent_page_id = block_child["id"] if block_child["type"] == "child_page" else parent_page_id
+                    recursive_unfold_block(block_child["id"], parent_page_id)
+
+        recursive_unfold_block(block_id, parent_page_id)  # start of the recursion
 
         return flat_block_children
 
+    def extract_units(self, block_id: _NotionID) -> List[_NotionObject]:
+        """Return a list of unit blocks."""
+        units_blocks = []
+        block_children = self.unfold_block(block_id)
+        for block in block_children:
+            unit_block = self._markdown_criteria_for_units(block)
+            if unit_block:
+                units_blocks.append(unit_block)
+        if self.debug_mode:
+            print(f"Found {len(units_blocks)} units.")
+        return units_blocks
+
+    def _markdown_criteria_for_units(self, block: _NotionObject) -> Union[int, str]:
+        """
+        this helper method returns either a valid "unit" string or False, serving as a
+        filter for the extract_units()
+        """
+        if block["type"] == "bulleted_list_item":
+            for rich_text in block["bulleted_list_item"]["rich_text"]:
+                # Check for bold and italic annotations
+                if rich_text["annotations"]["bold"] and rich_text["annotations"]["italic"]:
+                    block["unit"] = rich_text["plain_text"]
+                    return block
+        return False
+
+    def url_for_extracted_unit(self, unit_block: _NotionObject) -> str:
+        """Return a list of reference urls for each unit."""
+        if "unit" not in unit_block:
+            raise KeyError("unit_block does not have a 'unit' key.")
+
+        parent_page_id = self._clean_id(unit_block["parent_page_id"])
+        block_id = self._clean_id(unit_block["id"])
+        url = f"https://www.notion.so/{parent_page_id}?pvs=4#{block_id}"
+        return url
+
+    def get_contexts_from_database(self, database_id: _NotionID) -> List[_NotionObject]:
+        filter = {"property": "type", "multi_select": {"contains": "Contexts"}}
+        return self.query_database(database_id, filter)
+
 
 class CEPagesManager:
-    pass
+    WORDDATABASE_ID = "a9d64a44ea8844088612055786f85954"
+    CONTEXTS_ID = "6bd32fec4c8e4148978e7671d6558a35"
+    debug_mode: bool = DEBUG
+
+    def __init__(self, api_key: str):
+        self.notion_api_call = NotionAPI(api_key)
+
+    def refresh_database_with_contexts(self, database_id: _NotionID = WORDDATABASE_ID, contexts_id=CONTEXTS_ID):
+        """
+        main entry point for now, refresh the designated database with the units extracted from the designated contexts
+        """
+        units_blocks = self.notion_api_call.extract_units(contexts_id)
+        for unit_block in units_blocks:
+            self.append_unit_to_database(database_id, unit_block)
+
+    def append_unit_to_database(self, database_id: _NotionID, unit_block: _NotionObject) -> _NotionObject:
+        """
+        append units to the database with the given database_id
+        """
+        unit_name = unit_block["unit"]
+        unit_url = self.notion_api_call.url_for_extracted_unit(unit_block)
+        properties = {
+            "title": {"title": [{"text": {"content": unit_name}}]}
+        }  # Assuming all homographs have the same spelling
+        children = [
+            {
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [
+                        {
+                            "type": "text",
+                            "text": {
+                                "content": unit_name,
+                                "link": {"url": unit_url},
+                            },
+                        },
+                    ]
+                },
+            }
+        ]
+        return self.notion_api_call.create_page(database_id, properties, children)
 
 
 if __name__ == "__main__":
-    api_call = NotionAPI(os.environ.get("NOTION_KEY"))
-    api_call.get_block("6bd32fec4c8e4148978e7671d6558a35")
-    api_call.get_block_children("6bd32fec4c8e4148978e7671d6558a35")
+    """
+    ce = CEPagesManager(os.environ["NOTION_KEY"])
+    ce.refresh_database_with_contexts()
+    """
+    notion = NotionAPI(os.environ["NOTION_KEY"])
+    notion.get_database("aaa18f4dfc56495e835e0289cbe25f3b")
+    notion.get_contexts_from_database("aaa18f4dfc56495e835e0289cbe25f3b")
