@@ -278,6 +278,8 @@ class CEPagesManager:
                 },
             },
         ]
+        self.notion_api_call.create_page(database_id, properties, children)
+
         return self.notion_api_call.create_page(database_id, properties, children)
 
     def get_contexts_from_database(self, database_id: _NotionID = MAINDATABASE_ID) -> List[_NotionObject]:
@@ -293,7 +295,7 @@ class CEPagesManager:
         return the last extraction time for the given context
         """
 
-        Last_extracted_time = (
+        last_extracted_time = (
             context["properties"]["Last extracted time"]["date"]["start"]
             if "Last extracted time" in context["properties"]
             else ""
@@ -303,7 +305,31 @@ class CEPagesManager:
             if "Last edited time" in context["properties"]
             else ""
         )
-        print(Last_extracted_time, last_edited_time)
+        sync_state = self._date_time_compare(last_extracted_time, last_edited_time)
+        if DEBUG:
+            print(f"last_extracted_time: {last_extracted_time}")
+            print(f"last_edited_time: {last_edited_time}")
+            print(
+                f"sync_state: {sync_state}:" + ("extracted before last edited" if sync_state else "wait for extraction")
+            )
+
+        return
+
+    def _date_time_compare(self, last_extracted_time: str, last_edited_time: str) -> bool:
+        # Normalize the date strings
+        last_extracted_time = last_extracted_time.replace("Z", "+00:00")
+        last_edited_time = last_edited_time.replace("Z", "+00:00")
+
+        # Convert the strings to datetime objects
+        dt1 = datetime.fromisoformat(last_extracted_time)
+        dt2 = datetime.fromisoformat(last_edited_time)
+
+        # Strip seconds and microseconds for minute accuracy comparison
+        dt1 = dt1.replace(second=0, microsecond=0)
+        dt2 = dt2.replace(second=0, microsecond=0)
+
+        # Compare the two datetime objects
+        return dt2 <= dt1
 
     def update_extraction_time(self, context: _NotionObject) -> _NotionObject:
         """
@@ -327,5 +353,4 @@ if __name__ == "__main__":
     """
     contexts = ce.get_contexts_from_database()
     for context in contexts:
-        ce.update_extraction_time(context)
         ce.get_sync_status(context)
