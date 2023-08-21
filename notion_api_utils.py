@@ -99,11 +99,19 @@ class NotionAPI:
 
         return self._handle_response(response)
 
-    def query_database(self, database_id: _NotionID, filter: Dict[str, Any]) -> _NotionObject:
+    def query_database(self, database_id: _NotionID, filter: Dict[str, Any]) -> List[_NotionObject]:
+        children = []
         url = f"{self.BASE_URL}/databases/{self._clean_id(database_id)}/query"
-        data = {"filter": filter}
-        response = requests.post(url, headers=self.HEADERS, json=data)
-        return self._handle_response(response)
+        while True:
+            data = {"filter": filter}
+            response = requests.post(url, headers=self.HEADERS, json=data)
+            response_json = self._handle_response(response)
+            children.extend(response_json["results"])
+            if response_json["has_more"]:
+                url = f"https://api.notion.com/v1/databases/{database_id}/query?start_cursor={response_json['next_cursor']}"
+            else:
+                break
+        return children
 
     def get_block_children(self, block_id: _NotionID) -> List[_NotionObject]:
         """
@@ -194,26 +202,27 @@ class NotionAPI:
         url = f"https://www.notion.so/{parent_page_id}?pvs=4#{block_id}"
         return url
 
-    def get_contexts_from_database(self, database_id: _NotionID) -> List[_NotionObject]:
-        filter = {"property": "type", "multi_select": {"contains": "Contexts"}}
-        return self.query_database(database_id, filter)
-
 
 class CEPagesManager:
     WORDDATABASE_ID = "a9d64a44ea8844088612055786f85954"
-    CONTEXTS_ID = "6bd32fec4c8e4148978e7671d6558a35"
+    MAINDATABASE_ID = "aaa18f4dfc56495e835e0289cbe25f3b"
     debug_mode: bool = DEBUG
 
     def __init__(self, api_key: str):
         self.notion_api_call = NotionAPI(api_key)
 
-    def refresh_database_with_contexts(self, database_id: _NotionID = WORDDATABASE_ID, contexts_id=CONTEXTS_ID):
+    def refresh_word_database_with_contexts(
+        self, word_database_id: _NotionID = WORDDATABASE_ID, main_data_base_id: _NotionID = MAINDATABASE_ID
+    ):
         """
         main entry point for now, refresh the designated database with the units extracted from the designated contexts
         """
-        units_blocks = self.notion_api_call.extract_units(contexts_id)
+        contexts = self.get_contexts_from_database(main_data_base_id)
+        units_blocks = []
+        for context in contexts:
+            units_blocks.extend(self.notion_api_call.extract_units(context["id"]))
         for unit_block in units_blocks:
-            self.append_unit_to_database(database_id, unit_block)
+            self.append_unit_to_database(word_database_id, unit_block)
 
     def append_unit_to_database(self, database_id: _NotionID, unit_block: _NotionObject) -> _NotionObject:
         """
@@ -242,12 +251,15 @@ class CEPagesManager:
         ]
         return self.notion_api_call.create_page(database_id, properties, children)
 
+    def get_contexts_from_database(self, database_id: _NotionID) -> List[_NotionObject]:
+        filter = {"property": "type", "multi_select": {"contains": "Contexts"}}
+        contexts = self.notion_api_call.query_database(database_id, filter)
+        for context in contexts:
+            if context["object"] != "page":
+                raise NotionAPIError("'Contexts' type in the database contains non-page items.")
+        return contexts
+
 
 if __name__ == "__main__":
-    """
     ce = CEPagesManager(os.environ["NOTION_KEY"])
-    ce.refresh_database_with_contexts()
-    """
-    notion = NotionAPI(os.environ["NOTION_KEY"])
-    notion.get_database("aaa18f4dfc56495e835e0289cbe25f3b")
-    notion.get_contexts_from_database("aaa18f4dfc56495e835e0289cbe25f3b")
+    ce.refresh_word_database_with_contexts()
