@@ -204,15 +204,19 @@ class NotionAPI:
 
 
 class CEPagesManager:
-    WORDDATABASE_ID = "a9d64a44ea8844088612055786f85954"
     MAINDATABASE_ID = "aaa18f4dfc56495e835e0289cbe25f3b"
+    WORDDATABASE_ID = "a9d64a44ea8844088612055786f85954"
+    EXPRDATABASE_ID = "3670f8bab263462a8e60c6ae8ae88dd8"
     debug_mode: bool = DEBUG
 
     def __init__(self, api_key: str):
         self.notion_api_call = NotionAPI(api_key)
 
-    def refresh_word_database_with_contexts(
-        self, word_database_id: _NotionID = WORDDATABASE_ID, main_data_base_id: _NotionID = MAINDATABASE_ID
+    def refresh_units_database_with_contexts(
+        self,
+        word_database_id: _NotionID = WORDDATABASE_ID,
+        expression_database_id: _NotionID = EXPRDATABASE_ID,
+        main_data_base_id: _NotionID = MAINDATABASE_ID,
     ):
         """
         main entry point for now, refresh the designated database with the units extracted from the designated contexts
@@ -222,32 +226,56 @@ class CEPagesManager:
         for context in contexts:
             units_blocks.extend(self.notion_api_call.extract_units(context["id"]))
         for unit_block in units_blocks:
-            self.append_unit_to_database(word_database_id, unit_block)
+            self.append_unit_to_database(word_database_id, expression_database_id, unit_block)
 
-    def append_unit_to_database(self, database_id: _NotionID, unit_block: _NotionObject) -> _NotionObject:
+    def append_unit_to_database(
+        self, word_database_id: _NotionID, expression_database_id: _NotionID, unit_block: _NotionObject
+    ) -> _NotionObject:
         """
         append units to the database with the given database_id
         """
         unit_name = unit_block["unit"]
+        # decide if the unit is a word or a phrase
+        if " " in unit_name:
+            database_id = expression_database_id
+        else:
+            database_id = word_database_id
         unit_url = self.notion_api_call.url_for_extracted_unit(unit_block)
         properties = {
             "title": {"title": [{"text": {"content": unit_name}}]}
         }  # Assuming all homographs have the same spelling
         children = [
             {
-                "type": "paragraph",
-                "paragraph": {
+                "type": "heading_1",
+                "heading_1": {
                     "rich_text": [
                         {
                             "type": "text",
                             "text": {
-                                "content": unit_name,
-                                "link": {"url": unit_url},
+                                "content": "Contexts",
+                            },
+                        }
+                    ],
+                    "color": "default",
+                    "is_toggleable": True,
+                    "children": [
+                        {
+                            "type": "paragraph",
+                            "paragraph": {
+                                "rich_text": [
+                                    {
+                                        "type": "text",
+                                        "text": {
+                                            "content": f"{unit_name}",
+                                            "link": {"url": unit_url},
+                                        },
+                                    },
+                                ]
                             },
                         },
-                    ]
+                    ],
                 },
-            }
+            },
         ]
         return self.notion_api_call.create_page(database_id, properties, children)
 
@@ -259,7 +287,14 @@ class CEPagesManager:
                 raise NotionAPIError("'Contexts' type in the database contains non-page items.")
         return contexts
 
+    def create_access_logs_for_contexts(self, context: _NotionObject):
+        """
+        create an access log for each context in the database
+        """
+        id = context["id"]
+        last_edited_time = context["last_edited_time"]
+
 
 if __name__ == "__main__":
     ce = CEPagesManager(os.environ["NOTION_KEY"])
-    ce.refresh_word_database_with_contexts()
+    ce.refresh_units_database_with_contexts()
