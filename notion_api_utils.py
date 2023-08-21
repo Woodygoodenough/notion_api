@@ -1,6 +1,7 @@
 import os
 import requests
 import json
+from datetime import datetime
 import collections
 from settings import DEBUG
 from typing import NewType, Union, Dict, List, Any
@@ -279,7 +280,7 @@ class CEPagesManager:
         ]
         return self.notion_api_call.create_page(database_id, properties, children)
 
-    def get_contexts_from_database(self, database_id: _NotionID) -> List[_NotionObject]:
+    def get_contexts_from_database(self, database_id: _NotionID = MAINDATABASE_ID) -> List[_NotionObject]:
         filter = {"property": "type", "multi_select": {"contains": "Contexts"}}
         contexts = self.notion_api_call.query_database(database_id, filter)
         for context in contexts:
@@ -287,14 +288,44 @@ class CEPagesManager:
                 raise NotionAPIError("'Contexts' type in the database contains non-page items.")
         return contexts
 
-    def create_access_logs_for_contexts(self, context: _NotionObject):
+    def get_sync_status(self, context: _NotionObject) -> str:
         """
-        create an access log for each context in the database
+        return the last extraction time for the given context
         """
-        id = context["id"]
-        last_edited_time = context["last_edited_time"]
+
+        Last_extracted_time = (
+            context["properties"]["Last extracted time"]["date"]["start"]
+            if "Last extracted time" in context["properties"]
+            else ""
+        )
+        last_edited_time = (
+            context["properties"]["Last edited time"]["last_edited_time"]
+            if "Last edited time" in context["properties"]
+            else ""
+        )
+        print(Last_extracted_time, last_edited_time)
+
+    def update_extraction_time(self, context: _NotionObject) -> _NotionObject:
+        """
+        update the last extraction time for the given context
+        """
+
+        # Get the current date and time in UTC
+        current_utc_time = datetime.utcnow()
+
+        # Extract the date and minute
+        formatted_time = current_utc_time.strftime("%Y-%m-%dT%H:%M") + ":00.000+00:00"
+        properties = {"Last extracted time": {"date": {"start": formatted_time, "end": None, "time_zone": None}}}
+
+        return self.notion_api_call.update_page(context["id"], properties)
 
 
 if __name__ == "__main__":
     ce = CEPagesManager(os.environ["NOTION_KEY"])
+    """
     ce.refresh_units_database_with_contexts()
+    """
+    contexts = ce.get_contexts_from_database()
+    for context in contexts:
+        ce.update_extraction_time(context)
+        ce.get_sync_status(context)
