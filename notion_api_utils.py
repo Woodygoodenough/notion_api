@@ -173,6 +173,9 @@ class CEPagesManager:
         units_blocks = self.extract_units(block_children)
         for unit_block in units_blocks:
             self.append_unit_to_database(word_database_id, expression_database_id, unit_block)
+        # the updation should be the last step to ensure that all in-state sync info are accurate
+        # when there is an interruption at this stage, the only consequence is that the already synced pages will be
+        # synced again next time
         for child_page in child_pages_to_sync:
             self.update_extraction_time(child_page)
 
