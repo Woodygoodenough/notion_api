@@ -11,6 +11,10 @@ import inspect
 # Define the base Notion_api type
 _NotionID = NewType("_NotionID", str)
 _NotionObject = NewType("_NotionObjects", Dict[str, Any])
+# object type when accessing a page with page or database endpoint
+_NotionPage = NewType("_NotionPage", Dict[str, Any])
+# object type when accessing a page with block endpoint
+_NotionChildPage = NewType("_NotionChildPage", Dict[str, Any])
 _NotionResponse = NewType("_NotionResponse", Dict[str, Any])
 
 
@@ -140,7 +144,152 @@ class NotionAPI:
         response = requests.patch(url, headers=self.HEADERS, json=data)
         return self._handle_response(response)
 
-    # advanced methods: methods that involves more than one API call
+
+class CEPagesManager:
+    MAINDATABASE_ID = "aaa18f4dfc56495e835e0289cbe25f3b"
+    WORDDATABASE_ID = "a9d64a44ea8844088612055786f85954"
+    EXPRDATABASE_ID = "3670f8bab263462a8e60c6ae8ae88dd8"
+    debug_mode: bool = DEBUG
+
+    def __init__(self, api_key: str):
+        self.notion_api_call = NotionAPI(api_key)
+
+    def refresh_units_database_with_contexts(
+        self,
+        word_database_id: _NotionID = WORDDATABASE_ID,
+        expression_database_id: _NotionID = EXPRDATABASE_ID,
+        main_data_base_id: _NotionID = MAINDATABASE_ID,
+    ):
+        """
+        main entry point for now, refresh the designated database with the units extracted from the designated contexts
+        """
+        contexts = self.get_contexts_from_database(main_data_base_id)
+        units_blocks = []
+        for context in contexts:
+            units_blocks.extend(self.extract_units(context["id"]))
+        for unit_block in units_blocks:
+            self.append_unit_to_database(word_database_id, expression_database_id, unit_block)
+
+    def append_unit_to_database(
+        self, word_database_id: _NotionID, expression_database_id: _NotionID, unit_block: _NotionObject
+    ) -> _NotionObject:
+        """
+        append units to the database with the given database_id
+        """
+        unit_name = unit_block["unit"]
+        # decide if the unit is a word or a phrase
+        if " " in unit_name:
+            database_id = expression_database_id
+        else:
+            database_id = word_database_id
+        unit_url = self.url_for_extracted_unit(unit_block)
+        properties = {
+            "title": {"title": [{"text": {"content": unit_name}}]}
+        }  # Assuming all homographs have the same spelling
+        children = [
+            {
+                "type": "heading_1",
+                "heading_1": {
+                    "rich_text": [
+                        {
+                            "type": "text",
+                            "text": {
+                                "content": "Contexts",
+                            },
+                        }
+                    ],
+                    "color": "default",
+                    "is_toggleable": True,
+                    "children": [
+                        {
+                            "type": "paragraph",
+                            "paragraph": {
+                                "rich_text": [
+                                    {
+                                        "type": "text",
+                                        "text": {
+                                            "content": f"{unit_name}",
+                                            "link": {"url": unit_url},
+                                        },
+                                    },
+                                ]
+                            },
+                        },
+                    ],
+                },
+            },
+        ]
+
+        return self.notion_api_call.create_page(database_id, properties, children)
+
+    def get_contexts_from_database(self, database_id: _NotionID = MAINDATABASE_ID) -> List[_NotionObject]:
+        filter = {"property": "type", "multi_select": {"contains": "Contexts"}}
+        contexts = self.notion_api_call.query_database(database_id, filter)
+        for context in contexts:
+            if context["object"] != "page":
+                raise NotionAPIError("'Contexts' type in the database contains non-page items.")
+        return contexts
+
+    def get_sync_status(self, context_id: _NotionID) -> str:
+        """
+        return the last extraction time for the given context
+        """
+        context = self.notion_api_call.get_page(context_id)
+        if "Last extracted time" not in context["properties"]:
+            raise NotionAPIError("The given context does not have a 'Last extracted time' property.")
+        # the date type property contains a date field that only initializes to a dict object when first set
+        # otherwise it is None
+        date_info = context["properties"]["Last extracted time"]["date"]
+        last_extracted_time = context["properties"]["Last extracted time"]["date"]["start"] or "" if date_info else ""
+
+        if "Last edited time" not in context["properties"]:
+            # the last edited time property is always present in any object, so this should never happen
+            raise NotionAPIError(
+                "When trying to get the syc state of an object, it does not have a 'Last edited time' property."
+            )
+        last_edited_time = context["properties"]["Last edited time"]["last_edited_time"] or ""
+        sync_state = self._date_time_compare(last_extracted_time, last_edited_time)
+        if DEBUG:
+            print(f"last_extracted_time: {last_extracted_time}")
+            print(f"last_edited_time: {last_edited_time}")
+            print(
+                f"sync_state: {sync_state}:" + ("extracted before last edited" if sync_state else "wait for extraction")
+            )
+
+        return sync_state
+
+    def _date_time_compare(self, last_extracted_time: str, last_edited_time: str) -> bool:
+        # Normalize the date strings
+        if not last_extracted_time or not last_edited_time:
+            return False
+        last_extracted_time = last_extracted_time.replace("Z", "+00:00")
+        last_edited_time = last_edited_time.replace("Z", "+00:00")
+
+        # Convert the strings to datetime objects
+        extraction_format = datetime.fromisoformat(last_extracted_time)
+        edition_format = datetime.fromisoformat(last_edited_time)
+
+        # Strip seconds and microseconds for minute accuracy comparison
+        extraction_format = extraction_format.replace(second=0, microsecond=0)
+        edition_format = edition_format.replace(second=0, microsecond=0)
+
+        # Compare the two datetime objects
+        return edition_format <= extraction_format  # sync when the last edited time is before the last extracted time
+
+    def update_extraction_time(self, context: _NotionObject) -> _NotionObject:
+        """
+        update the last extraction time for the given context
+        """
+
+        # Get the current date and time in UTC
+        current_utc_time = datetime.utcnow()
+
+        # Extract the date and minute
+        formatted_time = current_utc_time.strftime("%Y-%m-%dT%H:%M") + ":00.000+00:00"
+        properties = {"Last extracted time": {"date": {"start": formatted_time, "end": None, "time_zone": None}}}
+
+        return self.notion_api_call.update_page(context["id"], properties)
+
     def unfold_block(self, block_id: _NotionID) -> List[_NotionObject]:
         """
         unfold a block and return a list of all the children blocks recursively,
@@ -149,19 +298,25 @@ class NotionAPI:
         to a block for better visual focus in the Notion UI.
         """
         flat_block_children = []
-        block_type = self.get_block(block_id)["type"]
+        block_type = self.notion_api_call.get_block(block_id)["type"]
         if block_type not in ("child_page", "child_database"):
             raise NotionAPIError("currently, method unfold_block() only accepts page_id or database_id as input.")
-            print(block_type)
         parent_page_id = block_id
 
         def recursive_unfold_block(block_id: _NotionID, parent_page_id: _NotionID):
-            block_children = self.get_block_children(block_id)
+            block_children = self.notion_api_call.get_block_children(block_id)
             for block_child in block_children:
+                # attach the parent_page_id to each block
                 block_child["parent_page_id"] = parent_page_id
+                if block_child["type"] == "child_page":
+                    if self.get_sync_status(block_child["id"]):
+                        # if the child_page is synced, skip it and its children
+                        continue
+                    # only refresh the parent_page_id when the a page is not synced, for the use of children blocks
+                    parent_page_id = block_child["id"]
+                # only append pages that are out of sync and the blocks within them
                 flat_block_children.append(block_child)
                 if block_child["has_children"]:
-                    parent_page_id = block_child["id"] if block_child["type"] == "child_page" else parent_page_id
                     recursive_unfold_block(block_child["id"], parent_page_id)
 
         recursive_unfold_block(block_id, parent_page_id)  # start of the recursion
@@ -203,154 +358,16 @@ class NotionAPI:
         url = f"https://www.notion.so/{parent_page_id}?pvs=4#{block_id}"
         return url
 
-
-class CEPagesManager:
-    MAINDATABASE_ID = "aaa18f4dfc56495e835e0289cbe25f3b"
-    WORDDATABASE_ID = "a9d64a44ea8844088612055786f85954"
-    EXPRDATABASE_ID = "3670f8bab263462a8e60c6ae8ae88dd8"
-    debug_mode: bool = DEBUG
-
-    def __init__(self, api_key: str):
-        self.notion_api_call = NotionAPI(api_key)
-
-    def refresh_units_database_with_contexts(
-        self,
-        word_database_id: _NotionID = WORDDATABASE_ID,
-        expression_database_id: _NotionID = EXPRDATABASE_ID,
-        main_data_base_id: _NotionID = MAINDATABASE_ID,
-    ):
-        """
-        main entry point for now, refresh the designated database with the units extracted from the designated contexts
-        """
-        contexts = self.get_contexts_from_database(main_data_base_id)
-        units_blocks = []
-        for context in contexts:
-            units_blocks.extend(self.notion_api_call.extract_units(context["id"]))
-        for unit_block in units_blocks:
-            self.append_unit_to_database(word_database_id, expression_database_id, unit_block)
-
-    def append_unit_to_database(
-        self, word_database_id: _NotionID, expression_database_id: _NotionID, unit_block: _NotionObject
-    ) -> _NotionObject:
-        """
-        append units to the database with the given database_id
-        """
-        unit_name = unit_block["unit"]
-        # decide if the unit is a word or a phrase
-        if " " in unit_name:
-            database_id = expression_database_id
-        else:
-            database_id = word_database_id
-        unit_url = self.notion_api_call.url_for_extracted_unit(unit_block)
-        properties = {
-            "title": {"title": [{"text": {"content": unit_name}}]}
-        }  # Assuming all homographs have the same spelling
-        children = [
-            {
-                "type": "heading_1",
-                "heading_1": {
-                    "rich_text": [
-                        {
-                            "type": "text",
-                            "text": {
-                                "content": "Contexts",
-                            },
-                        }
-                    ],
-                    "color": "default",
-                    "is_toggleable": True,
-                    "children": [
-                        {
-                            "type": "paragraph",
-                            "paragraph": {
-                                "rich_text": [
-                                    {
-                                        "type": "text",
-                                        "text": {
-                                            "content": f"{unit_name}",
-                                            "link": {"url": unit_url},
-                                        },
-                                    },
-                                ]
-                            },
-                        },
-                    ],
-                },
-            },
-        ]
-        self.notion_api_call.create_page(database_id, properties, children)
-
-        return self.notion_api_call.create_page(database_id, properties, children)
-
-    def get_contexts_from_database(self, database_id: _NotionID = MAINDATABASE_ID) -> List[_NotionObject]:
-        filter = {"property": "type", "multi_select": {"contains": "Contexts"}}
-        contexts = self.notion_api_call.query_database(database_id, filter)
-        for context in contexts:
-            if context["object"] != "page":
-                raise NotionAPIError("'Contexts' type in the database contains non-page items.")
-        return contexts
-
-    def get_sync_status(self, context: _NotionObject) -> str:
-        """
-        return the last extraction time for the given context
-        """
-
-        last_extracted_time = (
-            context["properties"]["Last extracted time"]["date"]["start"]
-            if "Last extracted time" in context["properties"]
-            else ""
-        )
-        last_edited_time = (
-            context["properties"]["Last edited time"]["last_edited_time"]
-            if "Last edited time" in context["properties"]
-            else ""
-        )
-        sync_state = self._date_time_compare(last_extracted_time, last_edited_time)
-        if DEBUG:
-            print(f"last_extracted_time: {last_extracted_time}")
-            print(f"last_edited_time: {last_edited_time}")
-            print(
-                f"sync_state: {sync_state}:" + ("extracted before last edited" if sync_state else "wait for extraction")
-            )
-
-        return
-
-    def _date_time_compare(self, last_extracted_time: str, last_edited_time: str) -> bool:
-        # Normalize the date strings
-        last_extracted_time = last_extracted_time.replace("Z", "+00:00")
-        last_edited_time = last_edited_time.replace("Z", "+00:00")
-
-        # Convert the strings to datetime objects
-        dt1 = datetime.fromisoformat(last_extracted_time)
-        dt2 = datetime.fromisoformat(last_edited_time)
-
-        # Strip seconds and microseconds for minute accuracy comparison
-        dt1 = dt1.replace(second=0, microsecond=0)
-        dt2 = dt2.replace(second=0, microsecond=0)
-
-        # Compare the two datetime objects
-        return dt2 <= dt1
-
-    def update_extraction_time(self, context: _NotionObject) -> _NotionObject:
-        """
-        update the last extraction time for the given context
-        """
-
-        # Get the current date and time in UTC
-        current_utc_time = datetime.utcnow()
-
-        # Extract the date and minute
-        formatted_time = current_utc_time.strftime("%Y-%m-%dT%H:%M") + ":00.000+00:00"
-        properties = {"Last extracted time": {"date": {"start": formatted_time, "end": None, "time_zone": None}}}
-
-        return self.notion_api_call.update_page(context["id"], properties)
+    def _clean_id(self, id_str: str) -> _NotionID:
+        """Remove '-' characters from the given string; consistent id_str format leads to more predictable behavior."""
+        return _NotionID(id_str.replace("-", ""))
 
 
 if __name__ == "__main__":
     ce = CEPagesManager(os.environ["NOTION_KEY"])
-    """
     ce.refresh_units_database_with_contexts()
+
     """
-    contexts = ce.get_contexts_from_database()
-    for context in contexts:
-        ce.get_sync_status(context)
+    """
+    # notion = NotionAPI(os.environ["NOTION_KEY"])
+    # notion.get_page("6bd32fec4c8e4148978e7671d6558a35")
