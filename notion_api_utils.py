@@ -164,11 +164,17 @@ class CEPagesManager:
         main entry point for now, refresh the designated database with the units extracted from the designated contexts
         """
         contexts = self.get_contexts_from_database(main_data_base_id)
+        block_children = []
         units_blocks = []
+        child_pages_to_sync = []
         for context in contexts:
-            units_blocks.extend(self.extract_units(context["id"]))
+            block_children.extend(self.unfold_block_and_mark_sync(context["id"])[0])
+            child_pages_to_sync.extend(self.unfold_block_and_mark_sync(context["id"])[1])
+        units_blocks = self.extract_units(block_children)
         for unit_block in units_blocks:
             self.append_unit_to_database(word_database_id, expression_database_id, unit_block)
+        for child_page in child_pages_to_sync:
+            self.update_extraction_time(child_page)
 
     def append_unit_to_database(
         self, word_database_id: _NotionID, expression_database_id: _NotionID, unit_block: _NotionObject
@@ -290,7 +296,7 @@ class CEPagesManager:
 
         return self.notion_api_call.update_page(context["id"], properties)
 
-    def unfold_block(self, block_id: _NotionID) -> List[_NotionObject]:
+    def unfold_block_and_mark_sync(self, block_id: _NotionID) -> [List[_NotionObject], List[_NotionObject]]:
         """
         unfold a block and return a list of all the children blocks recursively,
         with the parent page id attached to each block.
@@ -298,6 +304,7 @@ class CEPagesManager:
         to a block for better visual focus in the Notion UI.
         """
         flat_block_children = []
+        child_pages_to_sync = []
         block_type = self.notion_api_call.get_block(block_id)["type"]
         if block_type not in ("child_page", "child_database"):
             raise NotionAPIError("currently, method unfold_block() only accepts page_id or database_id as input.")
@@ -314,6 +321,8 @@ class CEPagesManager:
                         continue
                     # only refresh the parent_page_id when the a page is not synced, for the use of children blocks
                     parent_page_id = block_child["id"]
+                    # add a flag to indicate if the page needs to sync
+                    child_pages_to_sync.append(block_child)
                 # only append pages that are out of sync and the blocks within them
                 flat_block_children.append(block_child)
                 if block_child["has_children"]:
@@ -321,12 +330,11 @@ class CEPagesManager:
 
         recursive_unfold_block(block_id, parent_page_id)  # start of the recursion
 
-        return flat_block_children
+        return flat_block_children, child_pages_to_sync
 
-    def extract_units(self, block_id: _NotionID) -> List[_NotionObject]:
+    def extract_units(self, block_children: List[_NotionObject]) -> List[_NotionObject]:
         """Return a list of unit blocks."""
         units_blocks = []
-        block_children = self.unfold_block(block_id)
         for block in block_children:
             unit_block = self._markdown_criteria_for_units(block)
             if unit_block:
