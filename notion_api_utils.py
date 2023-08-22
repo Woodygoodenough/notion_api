@@ -217,6 +217,7 @@ class CEPagesManager:
     ) -> _NotionObject:
         """
         append a new context to the unit page
+        wait for further adjustment to better adding context
         """
         children = [
             {
@@ -435,11 +436,19 @@ class CEPagesManager:
         """Remove '-' characters from the given string; consistent id_str format leads to more predictable behavior."""
         return _NotionID(id_str.replace("-", ""))
 
+    def _reset_sync_state(self, context_id: _NotionID) -> _NotionObject:
+        """
+        reset the sync state of all the contexts by setting the last extracted time to None
+        """
+        contexts = self.get_contexts_from_database()
+        for context in contexts:
+            self.update_extraction_time(context)
+
 
 if __name__ == "__main__":
     ce = CEPagesManager(os.environ["NOTION_KEY"])
-    # ce.refresh_units_database_with_contexts()
-    print(ce.if_unit_in_database("Enamor", "a9d64a44ea8844088612055786f85954"))
+    ce.refresh_units_database_with_contexts()
+    # print(ce.if_unit_in_database("Enamor", "a9d64a44ea8844088612055786f85954"))
 
     """ """
     # notion = NotionAPI(os.environ["NOTION_KEY"])
