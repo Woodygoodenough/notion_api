@@ -172,14 +172,27 @@ class CEPagesManager:
             child_pages_to_sync.extend(self.unfold_block_and_mark_sync(context["id"])[1])
         units_blocks = self.extract_units(block_children)
         for unit_block in units_blocks:
-            self.append_unit_to_database(word_database_id, expression_database_id, unit_block)
+            self.append_or_update_unit_in_database(word_database_id, expression_database_id, unit_block)
         # the updation should be the last step to ensure that all in-state sync info are accurate
         # when there is an interruption at this stage, the only consequence is that the already synced pages will be
         # synced again next time
         for child_page in child_pages_to_sync:
             self.update_extraction_time(child_page)
 
-    def append_unit_to_database(
+    def if_unit_in_database(self, unit_name: str, database_id: _NotionID) -> bool:
+        """
+        check if the given unit is already in the database with the given database_id
+        """
+        filter = {"property": "Name", "title": {"equals": unit_name}}
+        units_pages = self.notion_api_call.query_database(database_id, filter)
+        if units_pages:
+            if len(units_pages) > 1:
+                raise NotionAPIError(f"More than one page found for the unit {unit_name}.")
+            return units_pages[0]["id"]
+        else:
+            return False
+
+    def append_or_update_unit_in_database(
         self, word_database_id: _NotionID, expression_database_id: _NotionID, unit_block: _NotionObject
     ) -> _NotionObject:
         """
@@ -191,7 +204,56 @@ class CEPagesManager:
             database_id = expression_database_id
         else:
             database_id = word_database_id
+        # check if the unit is already in the database
         unit_url = self.url_for_extracted_unit(unit_block)
+        unit_page_id = self.if_unit_in_database(unit_name, database_id)
+        if not unit_page_id:
+            self.create_unit_page(unit_name, unit_url, database_id)
+        else:
+            self.append_new_context_to_unit(unit_name, unit_url, database_id, unit_page_id)
+
+    def append_new_context_to_unit(
+        self, unit_name: str, unit_url: str, database_id: _NotionID, unitpage_id: _NotionID
+    ) -> _NotionObject:
+        """
+        append a new context to the unit page
+        """
+        children = [
+            {
+                "type": "heading_1",
+                "heading_1": {
+                    "rich_text": [
+                        {
+                            "type": "text",
+                            "text": {
+                                "content": "Contexts",
+                            },
+                        }
+                    ],
+                    "color": "default",
+                    "is_toggleable": True,
+                    "children": [
+                        {
+                            "type": "paragraph",
+                            "paragraph": {
+                                "rich_text": [
+                                    {
+                                        "type": "text",
+                                        "text": {
+                                            "content": f"{unit_name}",
+                                            "link": {"url": unit_url},
+                                        },
+                                    },
+                                ]
+                            },
+                        },
+                    ],
+                },
+            },
+        ]
+        return self.notion_api_call.append_block_children(unitpage_id, children)
+
+    def create_unit_page(self, unit_name, unit_url, database_id):
         properties = {
             "title": {"title": [{"text": {"content": unit_name}}]}
         }  # Assuming all homographs have the same spelling
@@ -376,9 +438,9 @@ class CEPagesManager:
 
 if __name__ == "__main__":
     ce = CEPagesManager(os.environ["NOTION_KEY"])
-    ce.refresh_units_database_with_contexts()
+    # ce.refresh_units_database_with_contexts()
+    print(ce.if_unit_in_database("Enamor", "a9d64a44ea8844088612055786f85954"))
 
-    """
-    """
+    """ """
     # notion = NotionAPI(os.environ["NOTION_KEY"])
-    # notion.get_page("6bd32fec4c8e4148978e7671d6558a35")
+    # notion.get_page("08a38e5dfb3c451aacee1e7c91f02e59")
