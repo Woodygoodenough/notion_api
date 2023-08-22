@@ -38,10 +38,12 @@ class MerriamWebsterAPI:
         # Check if the request was successful and the data is a list
         if not response_json or not isinstance(response_json, list):
             raise MWAPIError(
-                f"Error fetching data or unexpected data format: status_code = {response.status_code}; data = {data}"
+                f"Error fetching data or unexpected data format: status_code = {response.status_code}; data = {response_json}"
             )
         if "shortdef" not in response_json[0]:
-            raise MWAPIError(f"Error, most likely word not found and list of suggestions returned: data = {data}")
+            raise MWAPIError(
+                f"Error, most likely word not found and list of suggestions returned: data = {response_json}"
+            )
 
         return response_json
 
