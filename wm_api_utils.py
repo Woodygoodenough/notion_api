@@ -25,6 +25,7 @@ class MerriamWebsterAPI:
 
         # Make the request
         response = requests.get(url)
+        print(json.dumps(response.json(), indent=4))
         return self._handling_response(response)
 
     def _handling_response(self, response):
@@ -50,19 +51,20 @@ class MerriamWebsterAPI:
     def response_to_CE(self, response_json: dict):
         """method to convert the response to a simple version to be used for now"""
         word_simple_dicts_list = []
-        for homograph in response_json:
-            homo = {}
-            homo["hw"]: str = homograph["hwi"]["hw"]
-            homo["hom"]: int = homograph.get("hom", "")
-            homo["defs"]: list[str] = homograph["shortdef"]
-            homo["prs"]: list[dict[str, str]] = []
-            if "prs" in homograph["hwi"]:
-                for pr in homograph["hwi"]["prs"]:
+        for entry in response_json:
+            word_entry = {}
+            word_entry["show_word"]: str = entry["meta"]["id"].split(":")[0]
+            word_entry["hw"]: str = entry["hwi"]["hw"].replace("*", "·​")
+            word_entry["fl"]: str = entry["fl"] if "fl" in entry else ""
+            word_entry["defs"]: list[str] = entry["shortdef"]
+            word_entry["prs"]: list[dict[str, str]] = []
+            if "prs" in entry["hwi"]:
+                for pr in entry["hwi"]["prs"]:
                     pr_dict = {}
                     pr_dict["mw"] = pr["mw"] if "mw" in pr else ""
                     pr_dict["sound"] = self.mw_audio_url_construct(pr["sound"]) if "sound" in pr else ""
-                    homo["prs"].append(pr_dict)
-            word_simple_dicts_list.append(homo)
+                    word_entry["prs"].append(pr_dict)
+            word_simple_dicts_list.append(word_entry)
         return word_simple_dicts_list
 
     def mw_audio_url_construct(self, sound: dict, format: str = "mp3"):
@@ -85,6 +87,6 @@ class MerriamWebsterAPI:
 
 if __name__ == "__main__":
     mw = MerriamWebsterAPI(api_key=os.environ.get("MERRIAM_WEBSTER_KEY"))
-    response_json = mw.get_word_mw_response("test")
+    response_json = mw.get_word_mw_response("contingency")
 
     print(json.dumps(mw.response_to_CE(response_json), indent=4))

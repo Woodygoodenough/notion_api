@@ -2,20 +2,9 @@ import os
 import requests
 import json
 from datetime import datetime
-import collections
-from settings import DEBUG
-from typing import NewType, Union, Dict, List, Any
+from settings import DEBUG, _NotionObject, _NotionID, _NotionResponse
+from typing import Union, Dict, List, Any
 import inspect
-
-
-# Define the base Notion_api type
-_NotionID = NewType("_NotionID", str)
-_NotionObject = NewType("_NotionObjects", Dict[str, Any])
-# object type when accessing a page with page or database endpoint
-_NotionPage = NewType("_NotionPage", Dict[str, Any])
-# object type when accessing a page with block endpoint
-_NotionChildPage = NewType("_NotionChildPage", Dict[str, Any])
-_NotionResponse = NewType("_NotionResponse", Dict[str, Any])
 
 
 class NotionAPIError(Exception):
@@ -146,38 +135,10 @@ class NotionAPI:
 
 
 class CEPagesManager:
-    MAINDATABASE_ID = "aaa18f4dfc56495e835e0289cbe25f3b"
-    WORDDATABASE_ID = "a9d64a44ea8844088612055786f85954"
-    EXPRDATABASE_ID = "3670f8bab263462a8e60c6ae8ae88dd8"
     debug_mode: bool = DEBUG
 
     def __init__(self, api_key: str):
         self.notion_api_call = NotionAPI(api_key)
-
-    def refresh_units_database_with_contexts(
-        self,
-        word_database_id: _NotionID = WORDDATABASE_ID,
-        expression_database_id: _NotionID = EXPRDATABASE_ID,
-        main_data_base_id: _NotionID = MAINDATABASE_ID,
-    ):
-        """
-        main entry point for now, refresh the designated database with the units extracted from the designated contexts
-        """
-        contexts = self.get_contexts_from_database(main_data_base_id)
-        block_children = []
-        units_blocks = []
-        child_pages_to_sync = []
-        for context in contexts:
-            block_children.extend(self.unfold_block_and_mark_sync(context["id"])[0])
-            child_pages_to_sync.extend(self.unfold_block_and_mark_sync(context["id"])[1])
-        units_blocks = self.extract_units(block_children)
-        for unit_block in units_blocks:
-            self.append_or_update_unit_in_database(word_database_id, expression_database_id, unit_block)
-        # the updation should be the last step to ensure that all in-state sync info are accurate
-        # when there is an interruption at this stage, the only consequence is that the already synced pages will be
-        # synced again next time
-        for child_page in child_pages_to_sync:
-            self.update_extraction_time(child_page)
 
     def if_unit_in_database(self, unit_name: str, database_id: _NotionID) -> bool:
         """
@@ -192,109 +153,31 @@ class CEPagesManager:
         else:
             return False
 
-    def append_or_update_unit_in_database(
-        self, word_database_id: _NotionID, expression_database_id: _NotionID, unit_block: _NotionObject
-    ) -> _NotionObject:
-        """
-        append units to the database with the given database_id
-        """
-        unit_name = unit_block["unit"]
-        # decide if the unit is a word or a phrase
-        if " " in unit_name:
-            database_id = expression_database_id
-        else:
-            database_id = word_database_id
-        # check if the unit is already in the database
-        unit_url = self.url_for_extracted_unit(unit_block)
-        unit_page_id = self.if_unit_in_database(unit_name, database_id)
-        if not unit_page_id:
-            self.create_unit_page(unit_name, unit_url, database_id)
-        else:
-            self.append_new_context_to_unit(unit_name, unit_url, database_id, unit_page_id)
-
-    def append_new_context_to_unit(
-        self, unit_name: str, unit_url: str, database_id: _NotionID, unitpage_id: _NotionID
-    ) -> _NotionObject:
+    def append_new_context_to_unit(self, unit_name: str, unit_url: str, unitpage_id: _NotionID) -> _NotionObject:
         """
         append a new context to the unit page
-        wait for further adjustment to better adding context
+        wait for further adjustment to better add context
         """
         children = [
             {
-                "type": "heading_1",
-                "heading_1": {
+                "type": "paragraph",
+                "paragraph": {
                     "rich_text": [
                         {
                             "type": "text",
                             "text": {
-                                "content": "Contexts",
-                            },
-                        }
-                    ],
-                    "color": "default",
-                    "is_toggleable": True,
-                    "children": [
-                        {
-                            "type": "paragraph",
-                            "paragraph": {
-                                "rich_text": [
-                                    {
-                                        "type": "text",
-                                        "text": {
-                                            "content": f"{unit_name}",
-                                            "link": {"url": unit_url},
-                                        },
-                                    },
-                                ]
+                                "content": f"{unit_name}",
+                                "link": {"url": unit_url},
                             },
                         },
-                    ],
+                    ]
                 },
             },
         ]
+
         return self.notion_api_call.append_block_children(unitpage_id, children)
 
-    def create_unit_page(self, unit_name, unit_url, database_id):
-        properties = {
-            "title": {"title": [{"text": {"content": unit_name}}]}
-        }  # Assuming all homographs have the same spelling
-        children = [
-            {
-                "type": "heading_1",
-                "heading_1": {
-                    "rich_text": [
-                        {
-                            "type": "text",
-                            "text": {
-                                "content": "Contexts",
-                            },
-                        }
-                    ],
-                    "color": "default",
-                    "is_toggleable": True,
-                    "children": [
-                        {
-                            "type": "paragraph",
-                            "paragraph": {
-                                "rich_text": [
-                                    {
-                                        "type": "text",
-                                        "text": {
-                                            "content": f"{unit_name}",
-                                            "link": {"url": unit_url},
-                                        },
-                                    },
-                                ]
-                            },
-                        },
-                    ],
-                },
-            },
-        ]
-
-        return self.notion_api_call.create_page(database_id, properties, children)
-
-    def get_contexts_from_database(self, database_id: _NotionID = MAINDATABASE_ID) -> List[_NotionObject]:
+    def get_contexts_from_database(self, database_id: _NotionID) -> List[_NotionObject]:
         filter = {"property": "type", "multi_select": {"contains": "Contexts"}}
         contexts = self.notion_api_call.query_database(database_id, filter)
         for context in contexts:
@@ -435,14 +318,6 @@ class CEPagesManager:
     def _clean_id(self, id_str: str) -> _NotionID:
         """Remove '-' characters from the given string; consistent id_str format leads to more predictable behavior."""
         return _NotionID(id_str.replace("-", ""))
-
-    def _reset_sync_state(self, context_id: _NotionID) -> _NotionObject:
-        """
-        reset the sync state of all the contexts by setting the last extracted time to None
-        """
-        contexts = self.get_contexts_from_database()
-        for context in contexts:
-            self.update_extraction_time(context)
 
 
 if __name__ == "__main__":
