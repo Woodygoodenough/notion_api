@@ -207,7 +207,6 @@ class SyntheticOperation:
             }
             if anno:
                 rich_text_obj["annotations"].update(anno)
-            print(rich_text_obj)
             return rich_text_obj
 
         children = []

@@ -25,7 +25,8 @@ class MerriamWebsterAPI:
 
         # Make the request
         response = requests.get(url)
-        print(json.dumps(response.json(), indent=4))
+        if DEBUG:
+            print(json.dumps(response.json(), indent=4))
         return self._handling_response(response)
 
     def _handling_response(self, response):
